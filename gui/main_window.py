@@ -427,22 +427,39 @@ class MainWindow:
         if not confirm:
             return
 
+        # Read ALL tkinter widget values here on the main thread before
+        # spawning the background thread — tkinter is not thread-safe.
+        det    = self._build_detector()
+        custom = self._get_custom_terms()
+        suffix = self._suffix_var.get() or "_脱敏"
+        paths  = list(self._selected_paths)
+
         self._processing = True
         self._start_btn.configure(state="disabled")
         self._preview_btn.configure(state="disabled")
         self._progress_var.set(0)
         self._log("── 开始处理 Processing started ──")
 
-        thread = threading.Thread(target=self._process_all, daemon=True)
+        thread = threading.Thread(
+            target=self._process_all,
+            args=(paths, det, custom, suffix),
+            daemon=True,
+        )
         thread.start()
 
-    def _process_all(self) -> None:
-        """Background thread: process all selected files."""
-        paths   = list(self._selected_paths)
-        total   = len(paths)
-        det     = self._build_detector()
-        custom  = self._get_custom_terms()
-        suffix  = self._suffix_var.get() or "_脱敏"
+    def _process_all(
+        self,
+        paths: list[str],
+        det: SmartDetector,
+        custom: dict[str, str],
+        suffix: str,
+    ) -> None:
+        """Background thread: process all selected files.
+
+        All arguments are plain Python values — no tkinter widget access allowed
+        inside this method. Use _post_log / _post_progress to update the UI.
+        """
+        total          = len(paths)
         errors: list[str] = []
         total_replaced = 0
 
