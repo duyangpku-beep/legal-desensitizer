@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -54,6 +55,12 @@ class MainWindow:
         # State
         self._selected_paths: list[str] = []   # file(s) or expanded folder files
         self._processing     = False
+
+        # Thread-safe message queues — background thread puts, main thread drains
+        self._log_queue:      queue.Queue[str]   = queue.Queue()
+        self._progress_queue: queue.Queue[float] = queue.Queue()
+        self._done_queue:     queue.Queue[bool]  = queue.Queue()
+        self._poll_queues()  # start the polling loop
 
     # ─────────────────────────────────────────────────────────────────────────
     # UI Construction
@@ -514,7 +521,7 @@ class MainWindow:
         if errors:
             summary += f"\n失败 {len(errors)} 个: " + "; ".join(errors)
         self._post_log(summary)
-        self.root.after(0, self._on_done)
+        self._done_queue.put(True)
 
     def _on_done(self) -> None:
         self._processing = False
@@ -522,18 +529,54 @@ class MainWindow:
         self._preview_btn.configure(state="normal")
         self._status_var.set("完成 Done — 文件已保存 Files saved.")
         messagebox.showinfo("完成 Done", "脱敏处理完成！\nDesensitization complete!")
+        self._poll_queues()  # restart polling loop for next run
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Thread-safe UI helpers
+    # Thread-safe UI helpers — background thread ONLY puts into queues;
+    # main thread drains them via _poll_queues() every 100 ms.
     # ─────────────────────────────────────────────────────────────────────────
 
     def _post_log(self, msg: str) -> None:
-        self.root.after(0, self._log, msg)
+        """Safe to call from any thread."""
+        self._log_queue.put(msg)
 
     def _post_progress(self, pct: float) -> None:
-        self.root.after(0, self._progress_var.set, min(pct, 100))
+        """Safe to call from any thread."""
+        self._progress_queue.put(min(pct, 100))
+
+    def _poll_queues(self) -> None:
+        """Runs on the main thread every 100 ms; drains all queues."""
+        # Drain log messages
+        while True:
+            try:
+                msg = self._log_queue.get_nowait()
+                self._log(msg)
+            except queue.Empty:
+                break
+
+        # Drain progress updates (only care about the latest value)
+        latest_pct: float | None = None
+        while True:
+            try:
+                latest_pct = self._progress_queue.get_nowait()
+            except queue.Empty:
+                break
+        if latest_pct is not None:
+            self._progress_var.set(latest_pct)
+
+        # Check if processing finished
+        if not self._done_queue.empty():
+            try:
+                self._done_queue.get_nowait()
+            except queue.Empty:
+                pass
+            self._on_done()
+            return  # stop polling until next run
+
+        self.root.after(100, self._poll_queues)
 
     def _log(self, msg: str) -> None:
+        """Must only be called from the main thread."""
         self._log_text.configure(state="normal")
         self._log_text.insert("end", msg + "\n")
         self._log_text.see("end")
