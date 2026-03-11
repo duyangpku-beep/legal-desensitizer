@@ -52,19 +52,16 @@ A desktop GUI tool for legal professionals to redact sensitive information from 
 ### Quick start / 快速开始
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/yourusername/legal-desensitizer.git
+git clone https://github.com/duyangpku-beep/legal-desensitizer.git
 cd legal-desensitizer
+./start.sh        # handles everything: venv + deps + launch
+```
 
-# 2. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate     # Windows: venv\Scripts\activate
+`start.sh` creates a virtual environment on first run, installs dependencies, and launches the app. Just run it again next time — no setup needed.
 
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Launch
-python app.py
+**Windows users:** open the folder in terminal and run:
+```bat
+python -m venv venv && venv\Scripts\activate && pip install -r requirements.txt && python app.py
 ```
 
 ### Dependencies / 依赖
@@ -155,6 +152,24 @@ legal-desensitizer/
 pip install pytest
 python -m pytest tests/ -v
 ```
+
+---
+
+## Roadmap & Paid Version / 路线图与付费版本
+
+This tool is and will remain **free and open source** on GitHub.
+
+A paid desktop binary is planned for users who want a one-click install without Python setup:
+
+| Tier | What | When |
+|------|------|------|
+| **Free** | This repo — run from source via `start.sh` | Now |
+| **Pro** | Signed `.dmg` (macOS) and `.exe` (Windows) — no Python needed, auto-updates | Coming |
+| **Enterprise** | Bulk licence, MDM-deployable `.pkg` for law firms | On request |
+
+The Pro binary will be the **same codebase** — you're just paying to skip the Python setup and get automatic updates. If you're comfortable running `./start.sh`, you never need to pay anything.
+
+> **Want to be notified when the paid version launches?** Star this repo — release announcements go out via GitHub.
 
 ---
 
