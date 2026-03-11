@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+env/
+.env/
+desensitization_env/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Config / logs
+~/.legal_desensitizer/
+legal_desensitizer_log.txt
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Output docs (don't commit redacted client docs)
+*_脱敏.docx
+*_脱敏.pdf
+*_redacted.docx
+*_redacted.pdf
