@@ -134,6 +134,58 @@ class TestDocxProcessor:
         os.unlink(src)
 
 
+# ── DocxTextBoxes ─────────────────────────────────────────────────────────────
+
+class TestDocxTextBoxes:
+    """Verify that text inside w:txbxContent (text boxes) is extracted and replaced."""
+
+    def _make_docx_with_textbox(self, term: str) -> str:
+        """Create a temp docx with a w:txbxContent element containing *term*."""
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+
+        doc  = Document()
+        body = doc.element.body
+
+        txbx   = OxmlElement('w:txbxContent')
+        p_elem = OxmlElement('w:p')
+        r_elem = OxmlElement('w:r')
+        t_elem = OxmlElement('w:t')
+        t_elem.text = term
+        r_elem.append(t_elem)
+        p_elem.append(r_elem)
+        txbx.append(p_elem)
+        # Insert before the last child (w:sectPr)
+        body.insert(len(body) - 1, txbx)
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        doc.save(tmp.name)
+        tmp.close()
+        return tmp.name
+
+    def test_extract_text_includes_textbox(self) -> None:
+        src  = self._make_docx_with_textbox("SECRET_TEXTBOX_TERM")
+        proc = DocxProcessor()
+        text = proc.extract_text(src)
+        assert "SECRET_TEXTBOX_TERM" in text
+        os.unlink(src)
+
+    def test_process_replaces_textbox_content(self) -> None:
+        from core.processor import _collect_all_paragraphs
+
+        src  = self._make_docx_with_textbox("SECRET_TEXTBOX_TERM")
+        out  = src.replace(".docx", "_out.docx")
+        proc = DocxProcessor()
+        proc.process(src, {"SECRET_TEXTBOX_TERM": "[REDACTED]"}, out)
+
+        result_doc = Document(out)
+        all_text   = "\n".join(p.text for p in _collect_all_paragraphs(result_doc))
+        assert "[REDACTED]" in all_text
+        assert "SECRET_TEXTBOX_TERM" not in all_text
+        os.unlink(src)
+        os.unlink(out)
+
+
 # ── make_output_path ─────────────────────────────────────────────────────────
 
 class TestMakeOutputPath:

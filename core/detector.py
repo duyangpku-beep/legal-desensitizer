@@ -34,24 +34,52 @@ class DetectionResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # --- Contract parties ---
+# Suffix alternatives (shared by main pattern and negative lookahead).
+# Wrapped in (?i:...) so they match regardless of case:
+#   "Limited", "LIMITED", "limited" all match.
+# This is an inline flag group — it only affects what's inside, so the
+# surrounding [A-Z] anchor (which requires an uppercase first letter) is
+# unaffected and the overall patterns remain case-sensitive.
+_EN_SUFFIX = (
+    r'(?i:Co\.?,?\s*Ltd\.?|Limited|Inc\.?|Corp\.?|LLC|LLP|Company|Corporation|'
+    r'Enterprise|Funds?|Partnership|Trust|Holdings?|Capital|Management|Group|Investments?)'
+)
+
 PARTY_EN = re.compile(
-    # Group 1: company full name — must start uppercase; exclude '(' so it can't
-    # span into a later alias clause like '("Company")'
-    r'([A-Z][^(\n]+?(?:Co\.?,?\s*Ltd\.?|Limited|Inc\.?|Corp\.?|LLC|LLP|'
-    r'Company|Corporation|Enterprise|Fund|Partnership|Trust)[^()\n]*?)'
-    # Optional descriptor clause before the alias, e.g. ", a company incorporated in ..."
-    r'\s*[,(]\s*(?:[^,()\n]*?[Cc]ompany[^,()\n]*?,\s*)?'
-    # Alias in quotes — group 2, uppercase first letter
-    r'["\u201c]\s*([A-Z][A-Za-z\s]{1,30})\s*["\u201d]\s*\)',
+    # Group 1: company name up to (and including) the LAST suffix.
+    # (?:[^(\n,]|\([^"\n()]*\))*? allows (JURISDICTION) inside the name,
+    # e.g. "CANSINO BIOLOGICS (HONG KONG) LIMITED", while still stopping
+    # before the alias clause ("Alias").
+    # The negative lookahead (?!\s+SUFFIX) prevents stopping at a suffix that is
+    # still followed by another suffix word.
+    r'([A-Z](?:[^(\n,]|\([^"\n()]*\))*?'
+    r'(?:' + _EN_SUFFIX + r')'
+    r'(?!\s+(?:' + _EN_SUFFIX + r')))'
+    # Optional descriptor OUTSIDE group 1 (not captured)
+    r'[^()\n]*?'
+    # Alias: (the "Alias") or ("Alias") — curly quotes added
+    r'\(\s*(?:[Tt]he\s+)?["\u201c]\s*([A-Z][A-Za-z\s]{1,30})\s*["\u201d]\s*\)',
     # No IGNORECASE: [A-Z] stays strictly uppercase so "a company..." won't match
+)
+
+# Party definitions WITHOUT an alias, e.g.:
+#   CANSINO BIOLOGICS (HONG KONG) LIMITED, a company incorporated ...
+# Positive lookahead ensures we only match in a party-definition context.
+PARTY_EN_NO_ALIAS = re.compile(
+    r'([A-Z](?:[^(\n,]|\([^"\n()]*\))*?'
+    r'(?:' + _EN_SUFFIX + r')'
+    r'(?!\s+(?:' + _EN_SUFFIX + r')))'
+    r'(?=\s*,\s*(?:[Aa]\s+company\b|[Ii]ncorporated\b|[Ee]stablished\b'
+    r'|[Oo]rganis?ed\b|[Ww]hose\s+registered\b))',
 )
 
 PARTY_CN = re.compile(
     r'([^\s，,。；\n]{2,40}?'
     r'(?:有限公司|股份有限公司|集团有限公司|控股有限公司|合伙企业|'
-    r'基金管理公司|投资管理公司|科技有限公司|贸易有限公司|公司))'
-    r'[^（(]{0,30}[（("]'
-    r'\s*(?:以下简称\s*)?["""]\s*([^\s"""]{1,10})\s*["""]\s*[）)]',
+    r'基金管理公司|投资管理公司|资产管理有限公司|私募基金管理有限公司|'
+    r'咨询有限公司|科技有限公司|贸易有限公司|公司))'
+    r'[^（(]{0,40}[（("]'
+    r'\s*(?:以下)?简称\s*["""]\s*([^\s"""]{1,10})\s*["""]\s*[）)]',
     re.UNICODE,
 )
 
@@ -73,6 +101,10 @@ AMOUNT_CN_WRITTEN = re.compile(
     re.UNICODE,
 )
 
+AMOUNT_PCT = re.compile(
+    r'\b\d+(?:\.\d{1,4})?\s*%',
+)
+
 # --- Phone numbers ---
 PHONE_CN_MOBILE = re.compile(r'1[3-9]\d{9}')
 PHONE_CN_DASH   = re.compile(r'1[3-9]\d-\d{4}-\d{4}')
@@ -88,6 +120,18 @@ ID_CN    = re.compile(
 )
 PASSPORT = re.compile(r'[A-Z]\d{8}|[A-Z]{2}\d{7}')
 
+# --- Registration / company numbers ---
+REG_NO_EN = re.compile(
+    r'(?:Registration\s+No\.?|Reg(?:istration)?\.?\s+No\.?|Company\s+No\.?|CR\s+No\.?)'
+    r'\s*[：:]\s*[\w][\w\s/-]{1,20}',
+    re.IGNORECASE,
+)
+REG_NO_CN = re.compile(
+    r'(?:工商)?注册(?:编)?号(?:码)?\s*[：:]\s*\d[\d\s/-]{3,25}'
+    r'|统一社会信用代码\s*[：:]\s*[\w\d]{15,18}',
+    re.UNICODE,
+)
+
 # --- Addresses ---
 ADDR_CN = re.compile(
     r'(?:(?:中国\s*)?(?:[^\s，。]{2,4}省|[^\s，。]{2,3}市|北京|上海|广州|深圳|香港|澳门))'
@@ -97,6 +141,13 @@ ADDR_CN = re.compile(
 ADDR_EN = re.compile(
     r'\d+[,\s]+[A-Z][A-Za-z\s]+(?:Road|Street|Avenue|Ave|Lane|Drive|Dr|Way|'
     r'Place|Pl|Boulevard|Blvd)[,\s]+[A-Za-z\s,]+',
+    re.IGNORECASE,
+)
+# HK-style: Room/Flat/Unit N, NF, Building Name[, Street, Area]
+ADDR_HK = re.compile(
+    r'(?:Room|Flat|Unit|Suite|Shop|Office)\s+[\w\d/-]+\s*,'
+    r'\s*\d+[/\s]?F\b'
+    r'(?:\s*,\s*[^\n,;()]{2,60}){0,5}',
     re.IGNORECASE,
 )
 
@@ -119,6 +170,26 @@ OTHER_CO_CN = re.compile(
     r'([^\s，,。；\n（(]{2,20}?(?:有限公司|股份公司|集团|基金|合伙企业))',
     re.UNICODE,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Party-block extraction helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RECITAL_RE = re.compile(
+    r'\b(?:RECITALS?|WHEREAS|BACKGROUND|NOW[,\s]+THEREFORE|IT\s+IS\s+AGREED'
+    r'|THE\s+PARTIES\s+AGREE|背景|鉴于|兹议定|特此协议)\b',
+    re.IGNORECASE,
+)
+
+
+def _extract_parties_block(text: str) -> str:
+    """Return the text before the recitals/background section (where party
+    definitions live), or the first 2000 chars as a fallback."""
+    m = _RECITAL_RE.search(text)
+    if m and m.start() > 150:
+        return text[:m.start()]
+    return text[:2000]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,13 +300,34 @@ class SmartDetector:
 
     def _detect_parties(self, text: str) -> dict[str, str]:
         parties: dict[str, str] = {}
+        block = _extract_parties_block(text)
+
+        for m in PARTY_EN.finditer(block):
+            parties[m.group(1).strip()] = m.group(2).strip()
+        for m in PARTY_CN.finditer(block):
+            parties[m.group(1).strip()] = m.group(2).strip()
+        self._add_no_alias_parties(block, parties)
+
+        if parties:
+            return parties  # stop here; avoid WHEREAS false positives
+
+        # Fallback: full-text scan (when definition is embedded in body)
         for m in PARTY_EN.finditer(text):
-            full, alias = m.group(1).strip(), m.group(2).strip()
-            parties[full] = alias
+            parties[m.group(1).strip()] = m.group(2).strip()
         for m in PARTY_CN.finditer(text):
-            full, alias = m.group(1).strip(), m.group(2).strip()
-            parties[full] = alias
+            parties[m.group(1).strip()] = m.group(2).strip()
+        self._add_no_alias_parties(text, parties)
         return parties
+
+    @staticmethod
+    def _add_no_alias_parties(text: str, parties: dict[str, str]) -> None:
+        """Detect company names with no alias and assign generated labels."""
+        idx = sum(1 for v in parties.values() if v.startswith("[PARTY "))
+        for m in PARTY_EN_NO_ALIAS.finditer(text):
+            name = m.group(1).strip()
+            if name not in parties:
+                parties[name] = f"[PARTY {chr(65 + idx % 26)}]"
+                idx += 1
 
     def _detect_amounts(self, text: str) -> list[EntityMatch]:
         matches: list[EntityMatch] = []
@@ -245,6 +337,8 @@ class SmartDetector:
             matches.append(EntityMatch(m.group(), "AMOUNT", "[金额]"))
         for m in AMOUNT_CN_WRITTEN.finditer(text):
             matches.append(EntityMatch(m.group(), "AMOUNT", "[金额]"))
+        for m in AMOUNT_PCT.finditer(text):
+            matches.append(EntityMatch(m.group(), "AMOUNT", "[AMOUNT]"))
         return matches
 
     def _detect_phones(self, text: str) -> list[EntityMatch]:
@@ -269,6 +363,10 @@ class SmartDetector:
             matches.append(EntityMatch(m.group(), "ID", "[证件号码]"))
         for m in PASSPORT.finditer(text):
             matches.append(EntityMatch(m.group(), "ID", "[ID NUMBER]"))
+        for m in REG_NO_EN.finditer(text):
+            matches.append(EntityMatch(m.group(), "ID", "[REG. NO.]"))
+        for m in REG_NO_CN.finditer(text):
+            matches.append(EntityMatch(m.group(), "ID", "[注册号]"))
         return matches
 
     def _detect_addresses(self, text: str) -> list[EntityMatch]:
@@ -276,6 +374,8 @@ class SmartDetector:
         for m in ADDR_CN.finditer(text):
             matches.append(EntityMatch(m.group(), "ADDRESS", "[地址]"))
         for m in ADDR_EN.finditer(text):
+            matches.append(EntityMatch(m.group(), "ADDRESS", "[ADDRESS]"))
+        for m in ADDR_HK.finditer(text):
             matches.append(EntityMatch(m.group(), "ADDRESS", "[ADDRESS]"))
         return matches
 

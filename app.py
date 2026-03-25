@@ -4,13 +4,13 @@
 Legal Document Desensitizer — Entry Point
 法律文件脱敏工具 — 启动入口
 
-Version:  2.0.0
+Version:  2.1.0
 License:  MIT
 Author:   Yang Du
 Requires: python-docx >= 1.1.0, PyMuPDF >= 1.23.0 (optional, for PDF)
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 import sys
 import os

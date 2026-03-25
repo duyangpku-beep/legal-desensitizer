@@ -8,6 +8,7 @@ PdfProcessor:  uses PyMuPDF (fitz) for text search + redaction annotation.
 from __future__ import annotations
 
 import os
+import re
 import logging
 from typing import Callable
 
@@ -16,6 +17,103 @@ from docx import Document
 from .replacer import replace_in_paragraph
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PDF text normalisation helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LIGATURES = str.maketrans({
+    'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬀ': 'ff', 'ﬃ': 'ffi', 'ﬄ': 'ffl', 'ﬅ': 'st', 'ﬆ': 'st',
+})
+
+
+def _normalize_pdf_text(text: str) -> str:
+    """Collapse letter-spaced digits/chars and expand ligatures."""
+    # Collapse spaces between individual CJK characters
+    text = re.sub(r'(?<=[\u4e00-\u9fff])\s(?=[\u4e00-\u9fff])', '', text)
+    # Collapse spaces between digits (letter-spaced numbers)
+    text = re.sub(r'(?<=\d) (?=\d)', '', text)
+    # Expand ligatures
+    text = text.translate(_LIGATURES)
+    # Remove soft hyphens and line-break hyphens
+    text = re.sub(r'-\n', '', text)
+    text = text.replace('\xad', '')
+    return text
+
+
+def _find_by_words(page, term: str) -> list:
+    """Find `term` by reassembling adjacent words — handles ligatures + spacing."""
+    import fitz  # noqa: F401 (imported for fitz.Rect)
+    words = page.get_text("words")  # (x0,y0,x1,y1,text,block,line,word_no)
+    parts = term.strip().split()
+    n = len(parts)
+    if n == 0 or not words:
+        return []
+    results = []
+    for i in range(len(words) - n + 1):
+        chunk = [words[i + j][4].lower() for j in range(n)]
+        if chunk == [p.lower() for p in parts]:
+            x0 = min(words[i + j][0] for j in range(n))
+            y0 = min(words[i + j][1] for j in range(n))
+            x1 = max(words[i + j][2] for j in range(n))
+            y1 = max(words[i + j][3] for j in range(n))
+            results.append(fitz.Rect(x0, y0, x1, y1))
+    return results
+
+
+def _find_text_instances(page, term: str) -> list:
+    """Find all bounding boxes for `term` on `page` using three-tier fallback."""
+    # Tier 1: direct exact search
+    rects = page.search_for(term)
+    if rects:
+        return rects
+    # Tier 2: case-normalised (English terms)
+    rects = page.search_for(term.lower())
+    if rects:
+        return rects
+    # Tier 3: word-level reassembly
+    return _find_by_words(page, term)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOCX paragraph collection helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _collect_all_paragraphs(doc: "Document") -> list:
+    """
+    Collect ALL Paragraph objects in a DOCX document, including:
+    - Body paragraphs
+    - Table cell paragraphs (all nesting levels)
+    - Text box paragraphs (w:txbxContent, floating and inline)
+    - Header and footer paragraphs (and their text boxes)
+
+    Uses XML iter() so no paragraph is ever missed regardless of nesting depth.
+    """
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+
+    paras: list = []
+    seen: set[int] = set()
+
+    def _harvest(root_elem) -> None:
+        for p_elem in root_elem.iter(qn('w:p')):
+            eid = id(p_elem)
+            if eid not in seen:
+                seen.add(eid)
+                paras.append(Paragraph(p_elem, doc))
+
+    _harvest(doc.element.body)
+    for section in doc.sections:
+        for hf in (
+            section.header, section.footer,
+            section.even_page_header, section.even_page_footer,
+            section.first_page_header, section.first_page_footer,
+        ):
+            if hf is not None:
+                _harvest(hf._element)
+
+    return paras
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,20 +146,8 @@ class DocxProcessor:
         doc   = Document(input_path)
         stats: dict[str, int] = {}
 
-        # Collect all paragraphs: body + all table cells
-        all_paras = list(doc.paragraphs)
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    all_paras.extend(cell.paragraphs)
-
-        # Also process headers / footers
-        for section in doc.sections:
-            for hf in (section.header, section.footer,
-                       section.even_page_header, section.even_page_footer,
-                       section.first_page_header, section.first_page_footer):
-                if hf is not None:
-                    all_paras.extend(hf.paragraphs)
+        # Collect ALL paragraphs: body, nested tables, text boxes, headers/footers
+        all_paras = _collect_all_paragraphs(doc)
 
         total = len(all_paras)
         for idx, para in enumerate(all_paras):
@@ -83,14 +169,16 @@ class DocxProcessor:
 
     @staticmethod
     def extract_text(input_path: str) -> str:
-        """Extract plain text from a .docx file (for detection phase)."""
-        doc   = Document(input_path)
-        parts = [p.text for p in doc.paragraphs]
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    parts.extend(p.text for p in cell.paragraphs)
-        return "\n".join(parts)
+        """Extract plain text from a .docx file (for detection phase).
+
+        Covers body paragraphs, nested tables, text boxes, and headers/footers.
+        Normalises non-breaking spaces (\\xa0) → regular spaces so that
+        detection regex patterns match reliably.
+        """
+        from docx.oxml.ns import qn
+        doc = Document(input_path)
+        parts = [para.text for para in _collect_all_paragraphs(doc)]
+        return "\n".join(parts).replace('\xa0', ' ')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +231,9 @@ class PdfProcessor:
 
         for page_idx, page in enumerate(doc):
             for original, replacement in replacements.items():
-                instances = page.search_for(original)
+                instances = _find_text_instances(page, original)
+                if not instances:
+                    logger.debug("PDF: no match for %r on page %d", original, page_idx + 1)
                 for rect in instances:
                     # Add redaction annotation: white fill, overlay replacement text
                     annot = page.add_redact_annot(
@@ -173,7 +263,7 @@ class PdfProcessor:
         doc   = fitz.open(input_path)
         parts = [page.get_text() for page in doc]
         doc.close()
-        return "\n".join(parts)
+        return _normalize_pdf_text("\n".join(parts))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

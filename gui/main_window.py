@@ -38,7 +38,7 @@ class MainWindow:
     via the Tk event queue (``root.after``).
     """
 
-    VERSION = "2.0.0"
+    VERSION = "2.1.0"
 
     def __init__(self) -> None:
         self.cfg   = load_config()
